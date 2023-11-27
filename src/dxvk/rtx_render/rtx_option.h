@@ -25,6 +25,7 @@
 #include <unordered_set>
 #include <cassert>
 #include <limits>
+#include <fstream>
 
 #include "../util/config/config.h"
 #include "../util/xxHash/xxhash.h"
@@ -239,12 +240,36 @@ namespace dxvk {
         hasDocumentationBeenWritten = true;
       }
 
+      // Generate a file containing pairs of RTX option names and their respective memory addresses.
+      // This makes it possible to manipulate them externally.
+      // This is conditional to the environmental variable (opt-in).
+      std::ofstream exportFile;
+      if (env::getEnvVar("DXVK_EXPORT_RTX_OPTION_ADDRESSES") == "1") {
+        exportFile.open("rtxmap.txt");
+        if (exportFile.is_open()) {
+          exportFile << "[RtxOption]" << std::endl;
+          exportFile.close();
+        }
+        exportFile.open("rtxmap.txt", std::ios::app);
+      }
+
       auto& globalRtxOptions = RtxOptionImpl::getGlobalRtxOptionMap();
       for (auto& rtxOptionMapEntry : globalRtxOptions) {
         RtxOptionImpl& rtxOption = *rtxOptionMapEntry.second.get();
         rtxOption.readOption(RtxOptionImpl::s_startupOptions, RtxOptionImpl::ValueType::DefaultValue);
         rtxOption.readOption(RtxOptionImpl::s_customOptions, RtxOptionImpl::ValueType::Value);
+
+        // Write pairs of RTX option names and their memory addresses to the file.
+        // This block of code will only execute if the user has opted in since the file won't be opened otherwise.
+        if (exportFile.is_open()) {
+          if (rtxOption.type == OptionType::Bool || rtxOption.type == OptionType::Int || rtxOption.type == OptionType::Float) {
+            exportFile << rtxOption.getFullName() << ": " << &rtxOption.valueList[0] << std::endl;
+          } else {
+            exportFile << rtxOption.getFullName() << ": " << rtxOption.valueList[0].pointer << std::endl;
+          }
+        }
       }
+      exportFile.close();
     }
 
     operator T() const {
