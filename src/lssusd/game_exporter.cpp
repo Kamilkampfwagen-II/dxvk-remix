@@ -21,6 +21,7 @@
 */
 #include "game_exporter.h"
 #include "game_exporter_common.h"
+#include "mdl_helpers.h"
 #include "../util/log/log.h"
 
 #include "usd_include_begin.h"
@@ -79,6 +80,12 @@
 #include <AperturePBR_Normal.mdl.h>
 #include <AperturePBR_SpriteSheet.mdl.h>
 #include "../util/util_env.h"
+
+#ifndef NDEBUG
+#define ASSERT_OR_EXECUTE(BODY) assert((BODY))
+#else
+#define ASSERT_OR_EXECUTE(BODY) (BODY)
+#endif
 
 namespace {
 inline pxr::GfMatrix4d ToRHS(const pxr::GfMatrix4d& xform) {
@@ -308,11 +315,64 @@ void GameExporter::createApertureMdls(const std::string& baseExportPath) {
   writeFile(materialsDirPath + "AperturePBR_SpriteSheet.mdl", ___AperturePBR_SpriteSheet);
 }
 
+namespace{
+struct AttrDesc {
+  pxr::TfToken                           attrName;
+  pxr::SdfValueTypeName                  typeName;
+  bool                                   custom;
+  pxr::SdfVariability                    sdfVariability;
+};
+#define AttrDescMapEntry(attrEnum, typeName, custom, sdfVariability) \
+{ \
+  attrEnum, \
+  AttrDesc{pxr::TfToken(attrNames[attrEnum]), \
+           pxr::SdfValueTypeNames->##typeName, \
+           custom, \
+           pxr::SdfVariability##sdfVariability} \
+}
+
+namespace ShaderAttr {
+enum Enum {
+  OutputsOut,
+  DiffuseTex,
+  ImplSrc,
+  MdlSrcAsset,
+  MdlSrcAssetSubId,
+  Opacity,
+  FilterMode,
+  WrapModeU,
+  WrapModeV,
+};
+static std::unordered_map<Enum,std::string> attrNames {
+  {OutputsOut,       "outputs:out"},
+  {DiffuseTex,       "inputs:diffuse_texture"},
+  {ImplSrc,          "info:implementationSource"},
+  {MdlSrcAsset,      "info:mdl:sourceAsset"},
+  {MdlSrcAssetSubId, "info:mdl:sourceAsset:subIdentifier"},
+  {Opacity,          "enable_opacity"},
+  {FilterMode,       "filter_mode"},
+  {WrapModeU,        "wrap_mode_u"},
+  {WrapModeV,        "wrap_mode_v"},
+};
+static std::unordered_map<Enum,AttrDesc> attrDescs{
+  AttrDescMapEntry(OutputsOut,       Token, false, Varying),
+  AttrDescMapEntry(DiffuseTex,       Asset, false, Varying),
+  AttrDescMapEntry(ImplSrc,          Token, false, Uniform),
+  AttrDescMapEntry(MdlSrcAsset,      Asset, false, Uniform),
+  AttrDescMapEntry(MdlSrcAssetSubId, Token, false, Uniform),
+  AttrDescMapEntry(Opacity,           Bool, false, Uniform),
+  AttrDescMapEntry(FilterMode,        UInt, false, Uniform),
+  AttrDescMapEntry(WrapModeU,         UInt, false, Uniform),
+  AttrDescMapEntry(WrapModeV,         UInt, false, Uniform),
+};
+}
+}
+
 void GameExporter::exportMaterials(const Export& exportData, ExportContext& ctx) {
   dxvk::Logger::debug("[GameExporter][" + exportData.debugId + "][exportMaterials] Begin");
   const std::string matDirPath = exportData.baseExportPath + "/" + commonDirName::matDir;
   const std::string fullMaterialBasePath = computeLocalPath(matDirPath);
-
+  
   dxvk::env::createDirectory(matDirPath);
   for(const auto& [matId, matData] : exportData.materials) {
     // Build material stage
@@ -343,73 +403,42 @@ void GameExporter::exportMaterials(const Export& exportData, ExportContext& ctx)
     const auto shaderPrim = shader.GetPrim();
     assert(shaderPrim);
 
-    // Create shader prim outputs attr
-    static const pxr::TfToken kTokOutputsOutput("outputs:out");
-    const auto outputsOutAttr =
-      shaderPrim.CreateAttribute(kTokOutputsOutput, pxr::SdfValueTypeNames->Token, false, pxr::SdfVariabilityVarying);
+    std::unordered_map<ShaderAttr::Enum, pxr::UsdAttribute> shaderAttrs;
+    for(const auto& [attrEnum, desc] : ShaderAttr::attrDescs) {
+      shaderAttrs[attrEnum] =
+        shaderPrim.CreateAttribute(desc.attrName, desc.typeName, desc.custom, desc.sdfVariability);
+      // Cannot assert. Attr "outputs:out" asserts false, but authoring + Setting works just fine.
+      // assert(shaderAttrs[attrEnum]); 
+    }
 
     // Create and connect material outputs to shader outputs
     static const pxr::TfToken kTokOutputsMdlSurface("outputs:mdl:surface");
     const auto outputsMdlSurfaceAttr =
       matPrim.CreateAttribute(kTokOutputsMdlSurface, pxr::SdfValueTypeNames->Token, false, pxr::SdfVariabilityVarying);
-    outputsMdlSurfaceAttr.AddConnection(outputsOutAttr.GetPath(), pxr::UsdListPositionFrontOfAppendList);
+    outputsMdlSurfaceAttr.AddConnection(shaderAttrs[ShaderAttr::OutputsOut].GetPath(), pxr::UsdListPositionFrontOfAppendList);
 
     // Set shader "Kind"
     static const pxr::TfToken kTokMaterial("Material");
     pxr::UsdModelAPI(shader).SetKind(kTokMaterial);
 
     // Create and set textures asset paths on material
-    static const auto setTextureAttr =
-      [](const pxr::UsdPrim& shaderPrim, const pxr::TfToken attrName, const std::string& relTexPath, const std::string& fullMaterialBasePath)
-    {
-      const auto attr = shaderPrim.CreateAttribute(pxr::TfToken(attrName), pxr::SdfValueTypeNames->Asset, false, pxr::SdfVariabilityVarying);
-      assert(attr);
-      const auto fullTexturePath = computeLocalPath(relTexPath);
-      const auto relToMaterialsTexPath = std::filesystem::relative(fullTexturePath,fullMaterialBasePath).string();
-      const bool bSetSuccessful = attr.Set(pxr::SdfAssetPath(relToMaterialsTexPath));
-      assert(bSetSuccessful);
-      static const pxr::TfToken kTokColorSpaceAuto("auto");
-      attr.SetColorSpace(kTokColorSpaceAuto);
-      return true;
-    };
-    static const pxr::TfToken kTokenInputsDiffuseTex("inputs:diffuse_texture");
-
-    // Try to use an updated texture, if that doesn't work, try to use an old one
-    setTextureAttr(shaderPrim, kTokenInputsDiffuseTex, matData.albedoTexPath, fullMaterialBasePath);
+    const auto relToMaterialsTexPath =
+      std::filesystem::relative(computeLocalPath(matData.albedoTexPath), fullMaterialBasePath).string();
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::DiffuseTex].Set(pxr::SdfAssetPath(relToMaterialsTexPath)));
+    shaderAttrs[ShaderAttr::DiffuseTex].SetColorSpace(pxr::TfToken("auto"));
 
     // Create and set OmniPBR MDL boilerplate attributes on shader
-    static const pxr::TfToken kTokInfoImplSource("info:implementationSource");
-    static const pxr::TfToken kTokSourceAsset("sourceAsset");
-    const auto infoImplSourceAttr =
-      shaderPrim.CreateAttribute(kTokInfoImplSource, pxr::SdfValueTypeNames->Token, false, pxr::SdfVariabilityUniform);
-    assert(infoImplSourceAttr);
-    const bool bSetInfoImplSourceAttr = infoImplSourceAttr.Set(kTokSourceAsset);
-    assert(bSetInfoImplSourceAttr);
-
-    static const pxr::TfToken kTokInfoMdlSourceAsset("info:mdl:sourceAsset");
-
-    static const pxr::SdfAssetPath kSdfAssetPathOmniPBR("./AperturePBR_Opacity.mdl");
-    const auto infoMdlSourceAsset =
-      shaderPrim.CreateAttribute(kTokInfoMdlSourceAsset, pxr::SdfValueTypeNames->Asset, false, pxr::SdfVariabilityUniform);
-    assert(infoMdlSourceAsset);
-    const bool bSetInfoMdlSourceAsset = infoMdlSourceAsset.Set(kSdfAssetPathOmniPBR);
-    assert(bSetInfoMdlSourceAsset);
-
-    static const pxr::TfToken kTokInfoMdlSourceAssetSubId("info:mdl:sourceAsset:subIdentifier");
-    static const pxr::TfToken kTokOmniPBR("AperturePBR_Opacity");
-    const auto infoImplSourceSubIdAttr =
-      shaderPrim.CreateAttribute(kTokInfoMdlSourceAssetSubId, pxr::SdfValueTypeNames->Token, false, pxr::SdfVariabilityUniform);
-    assert(infoImplSourceSubIdAttr);
-    const bool bSetInfoMdlSourceAssetSubId = infoImplSourceSubIdAttr.Set(kTokOmniPBR);
-    assert(bSetInfoMdlSourceAssetSubId);
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::ImplSrc].Set(pxr::TfToken("sourceAsset")));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::MdlSrcAsset].Set(pxr::SdfAssetPath("./AperturePBR_Opacity.mdl")));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::MdlSrcAssetSubId].Set(pxr::TfToken("AperturePBR_Opacity")));
 
     // Mark whether to enable varying opacity
-    static const pxr::TfToken kTokEnableOpacity("enable_opacity");
-    const auto enableOpacityAttr =
-      shaderPrim.CreateAttribute(kTokEnableOpacity, pxr::SdfValueTypeNames->Bool, false, pxr::SdfVariabilityUniform);
-    assert(enableOpacityAttr);
-    const bool bSetEnableOpacityAttr = enableOpacityAttr.Set(matData.enableOpacity);
-    assert(bSetEnableOpacityAttr);
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::Opacity].Set(matData.enableOpacity));
+
+    // Sampler State
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::FilterMode].Set((uint32_t)lss::Mdl::Filter::vkToMdl(matData.sampler.filter)));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::WrapModeU].Set((uint32_t)lss::Mdl::WrapMode::vkToMdl(matData.sampler.addrModeU)));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::WrapModeV].Set((uint32_t)lss::Mdl::WrapMode::vkToMdl(matData.sampler.addrModeV)));
 
     matStage->Save();
     
@@ -538,8 +567,27 @@ void GameExporter::exportMeshes(const Export& exportData, ExportContext& ctx) {
     }
     meshStage->GetRootLayer()->SetCustomLayerData(customLayerData);
 
+    // Some meshes require visual correction to make DCC tool QoL easier.
+    pxr::SdfPath meshXformSdfPath;
+    if(exportData.meta.bCorrectBakedTransforms) {
+      // First: calculate xform required to correct this mesh
+      pxr::GfMatrix4d correctionXform{1.0};
+      // Visually undo world transform if it's baked into mesh vertices
+      correctionXform.SetTranslateOnly(pxr::GfVec3d(mesh.origin));
+      correctionXform = correctionXform.GetInverse();
+
+      // Second: apply xform 
+      const auto correctionXformSdfPath = gStageRootPath.AppendElementString("visual_correction");
+      auto correctionXformSchema = pxr::UsdGeomXform::Define(meshStage, correctionXformSdfPath);
+      auto meshXformOp = correctionXformSchema.AddTransformOp();
+      assert(meshXformOp);
+      meshXformOp.Set(correctionXform);
+      meshXformSdfPath = correctionXformSdfPath.AppendElementString(meshName);
+    } else {
+      meshXformSdfPath = gStageRootPath.AppendElementString(meshName);
+    }
+    
     // Build mesh xform prim on mesh stage, make it visible
-    const auto meshXformSdfPath = gStageRootPath.AppendElementString(meshName);
     pxr::UsdGeomXformable meshXformSchema;
     if (isSkeleton) {
       meshXformSchema = pxr::UsdSkelRoot::Define(meshStage, meshXformSdfPath);
@@ -551,16 +599,6 @@ void GameExporter::exportMeshes(const Export& exportData, ExportContext& ctx) {
     auto meshXformVisibilityAttr = meshXformSchema.CreateVisibilityAttr();
     assert(meshXformVisibilityAttr);
     meshXformVisibilityAttr.Set(gVisibilityInherited);
-
-    // Visually undo world transform if it's baked into mesh vertices
-    if(exportData.meta.bCorrectBakedTransforms) {
-      auto meshXformOp = meshXformSchema.AddTransformOp();
-      assert(meshXformOp);
-      pxr::GfMatrix4d xform{1.0};
-      xform.SetTranslateOnly(pxr::GfVec3d(mesh.origin));
-      xform = xform.GetInverse();
-      meshXformOp.Set(xform);
-    }
 
     // Build mesh geometry prim under above xform
     const auto meshSchemaSdfPath = meshXformSdfPath.AppendChild(gTokMesh);
@@ -701,7 +739,7 @@ void GameExporter::exportMeshes(const Export& exportData, ExportContext& ctx) {
 
       const std::string relMeshStagePath = relMeshDirPath + meshName + ctx.extension;
       auto meshInstanceUsdReferences = meshInstanceXformSchema.GetPrim().GetReferences();
-      meshInstanceUsdReferences.AddReference(relMeshStagePath);
+      meshInstanceUsdReferences.AddReference(relMeshStagePath,meshXformSdfPath);
 
       auto meshInstanceXformVisibilityAttr = meshInstanceXformSchema.CreateVisibilityAttr();
       assert(meshInstanceXformVisibilityAttr);
@@ -816,34 +854,44 @@ void GameExporter::exportColorOpacityBufferSet(const BufSet<Color>& bufSet, pxr:
 void GameExporter::exportInstances(const Export& exportData, ExportContext& ctx) {
   assert(exportData.bExportInstanceStage);
   dxvk::Logger::debug("[GameExporter][" + exportData.debugId + "][exportInstances] Begin");
+
+  // First apply any visual corrections globally
   if(exportData.meta.bCorrectBakedTransforms) {
     auto rootInstancesXformSchema = pxr::UsdGeomXform::Get(ctx.instanceStage,gRootInstancesPath);
     assert(rootInstancesXformSchema);
-    setStageOffsetXform(rootInstancesXformSchema, exportData.stageOrigin, exportData.meta.isLHS);
+
+    pxr::GfMatrix4d xform{1.0};
+    if (exportData.meta.bCorrectBakedTransforms) {
+      xform.SetTranslateOnly(-exportData.stageOrigin);
+    }
+    xform = exportData.meta.isLHS ? ToRHS(xform) : xform;
+
+    auto transformOp = rootInstancesXformSchema.AddTransformOp();
+    assert(transformOp);
+    transformOp.Set(xform);
   }
+
+  // Now process each individual instance
   for(const auto& [instId,instanceData] : exportData.instances) {
     // Build base Xform prim for instance to reside in
     auto instanceName = (instanceData.isSky ? "sky_" : "inst_") + std::string(instanceData.instanceName);
     pxr::SdfPath instancePath = gRootInstancesPath.AppendElementString(instanceName);
-    auto instanceXformSchema = pxr::UsdGeomXform::Define(ctx.instanceStage, instancePath);
-    
-    pxr::SdfPath meshRefPath = instancePath.AppendElementString("ref");
-    pxr::UsdGeomXformable meshRefXformSchema;
+    pxr::UsdGeomXformable instanceXformSchema;
     const bool isSkeleton = !instanceData.boneXForms.empty();
     if (isSkeleton) {
-      meshRefXformSchema = pxr::UsdSkelRoot::Define(ctx.instanceStage, meshRefPath);
+      instanceXformSchema = pxr::UsdSkelRoot::Define(ctx.instanceStage, instancePath);
     } else {
-      meshRefXformSchema = pxr::UsdGeomXform::Define(ctx.instanceStage, meshRefPath);
+      instanceXformSchema = pxr::UsdGeomXform::Define(ctx.instanceStage, instancePath);
     }
-    assert(meshRefXformSchema);
+    assert(instanceXformSchema);
 
     // Attach reference to mesh in question
     const Reference& meshLssReference = ctx.meshReferences[instanceData.meshId];
-    auto instanceUsdReferences = meshRefXformSchema.GetPrim().GetReferences();
+    auto instanceUsdReferences = instanceXformSchema.GetPrim().GetReferences();
     instanceUsdReferences.AddInternalReference(meshLssReference.instanceSdfPath);
     
     // Set instanced mesh to now be visible
-    auto visibilityAttr = meshRefXformSchema.CreateVisibilityAttr();
+    auto visibilityAttr = instanceXformSchema.CreateVisibilityAttr();
     assert(visibilityAttr);
     visibilityAttr.Set(gVisibilityInherited);
     
@@ -858,13 +906,13 @@ void GameExporter::exportInstances(const Export& exportData, ExportContext& ctx)
       const Reference& matLssReference = ctx.matReferences[instanceData.matId];
       const auto shaderMatSchema = pxr::UsdShadeMaterial::Get(ctx.instanceStage, matLssReference.instanceSdfPath);
       assert(shaderMatSchema);
-      pxr::UsdShadeMaterialBindingAPI(meshRefXformSchema.GetPrim()).Bind(shaderMatSchema);
+      pxr::UsdShadeMaterialBindingAPI(instanceXformSchema.GetPrim()).Bind(shaderMatSchema);
     }
 
     if (isSkeleton) {
       // Set instance skeleton pose / animation
-      const auto skelPoseSdfPath = meshRefPath.AppendChild(gTokPose);
-      const auto skelSkelSdfPath = meshRefPath.AppendChild(gTokSkel);
+      const auto skelPoseSdfPath = instancePath.AppendChild(gTokPose);
+      const auto skelSkelSdfPath = instancePath.AppendChild(gTokSkel);
       auto skelAnimationSchema = pxr::UsdSkelAnimation::Define(ctx.instanceStage, skelPoseSdfPath);
       assert(skelAnimationSchema);
       const lss::Skeleton& skel = ctx.skeletons[instanceData.meshId];
@@ -883,7 +931,7 @@ void GameExporter::exportInstances(const Export& exportData, ExportContext& ctx)
       auto animationSource = skelBindingSchema.CreateAnimationSourceRel();
       animationSource.SetTargets({skelPoseSdfPath});
     } else {
-      const auto meshSchemaSdfPath = meshRefPath.AppendChild(gTokMesh);
+      const auto meshSchemaSdfPath = instancePath.AppendChild(gTokMesh);
       pxr::UsdGeomMesh meshSchema = pxr::UsdGeomMesh::Define(ctx.instanceStage, meshSchemaSdfPath);
       pxr::UsdGeomPrimvarsAPI primvarsAPI(meshSchema.GetPrim());
 
@@ -906,16 +954,9 @@ void GameExporter::exportInstances(const Export& exportData, ExportContext& ctx)
 #undef _SetDrawMetadata
     }
 
-    const auto& mesh = exportData.meshes.at(instanceData.meshId);
-    // Move instance back to its original positions by undoing the visual correction.
-    // a.k.a. Invert the invert done in exportMeshes
-    pxr::GfMatrix4d commonXform{1.0};
-    if(exportData.meta.bCorrectBakedTransforms) {
-      commonXform.SetTranslateOnly(pxr::GfVec3d(mesh.origin));
-    }
     setTimeSampledXforms<true>(ctx.instanceStage, instancePath,
                                instanceData.firstTime, instanceData.finalTime, instanceData.xforms,
-                               exportData.meta, commonXform);
+                               exportData.meta);
     setVisibilityTimeSpan(ctx.instanceStage, instancePath, instanceData.firstTime, instanceData.finalTime, exportData.meta.numFramesCaptured);
   }
   dxvk::Logger::debug("[GameExporter][" + exportData.debugId + "][exportInstances] End");

@@ -79,6 +79,15 @@ struct NeeCacheArgs {
   uint clearCache;
 };
 
+struct DomeLightArgs {
+  mat4 worldToLightTransform;
+
+  vec3 radiance;
+  uint active;
+
+  uint textureIndex;
+};
+
 // Constant buffer
 struct RaytraceArgs {
   Camera camera;
@@ -265,6 +274,8 @@ struct RaytraceArgs {
   float reSTIRGIMISRoughness;
   float reSTIRGIMISParallaxAmount;
   uint enableReSTIRGIDemodulatedTargetFunction;
+  uint enableReSTIRGISampleValidation;
+  float reSTIRGISampleValidationThreshold;
 
   uint surfaceCount;
   uint teleportationPortalIndex; // 0 means no teleportation, 1+ means portal 0+
@@ -293,8 +304,15 @@ struct RaytraceArgs {
   uint pomEnableReSTIRGI;
   uint pomEnablePSR;
   uint pomMaxIterations;
-
   uint thinOpaqueEnable;
-
   float totalMipBias;
+
+  DomeLightArgs domeLightArgs;
+
+  float2 upscaleFactor;   // Displayed(upscaled) / RT resolution
+
+  // Values to use on a ray miss
+  float clearColorDepth;
+  uint32_t clearColorPicking;
+  vec3 clearColorNormal;
 };

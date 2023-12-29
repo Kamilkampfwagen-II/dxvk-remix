@@ -67,6 +67,8 @@ namespace dxvk {
 
   Metrics Metrics::s_instance;
 
+  bool g_allowSrgbConversionForOutput = true;
+
   void RtxContext::takeScreenshot(std::string imageName, Rc<DxvkImage> image) {
     // NOTE: Improve this, I'd like all textures from the same frame to have the same time code...  Currently sampling the time on each "dump op" results in different timecodes.
     auto t = std::time(nullptr);
@@ -443,7 +445,7 @@ namespace dxvk {
 
         // RTXDI
         m_common->metaRtxdiRayQuery().dispatch(this, rtOutput);
-        
+
         // NEE Cache
         dispatchNeeCache(rtOutput);
         
@@ -513,7 +515,7 @@ namespace dxvk {
         // Tone mapping
         // WAR for TREX-553 - disable sRGB conversion as NVTT implicitly applies it during dds->png
         // conversion for 16bit float formats
-        const bool performSRGBConversion = !captureScreenImage;
+        const bool performSRGBConversion = !captureScreenImage && g_allowSrgbConversionForOutput;
         dispatchToneMapping(rtOutput, performSRGBConversion, frameTimeSecs);
 
         if (captureScreenImage) {
@@ -694,6 +696,10 @@ namespace dxvk {
     }
   }
 
+  void RtxContext::commitExternalGeometryToRT(ExternalDrawState&& state) {
+    getSceneManager().submitExternalDraw(this, std::move(state));
+  }
+
   static uint32_t jenkinsHash(uint32_t a) {
     // http://burtleburtle.net/bob/hash/integer.html
     a = (a + 0x7ed55d16) + (a << 12);
@@ -850,6 +856,11 @@ namespace dxvk {
 
     constants.totalMipBias = getSceneManager().getTotalMipBias(); 
 
+    const VkExtent3D& rtExtent = rtOutput.m_finalOutput.image->info().extent;
+    constants.upscaleFactor = float2 {
+      rtOutput.m_compositeOutputExtent.width / static_cast<float>(rtExtent.width),
+      rtOutput.m_compositeOutputExtent.height / static_cast<float>(rtExtent.height) };
+
     constants.terrainArgs = getSceneManager().getTerrainBaker().getTerrainArgs();
 
     constants.thinOpaqueEnable = RtxOptions::SubsurfaceScattering::enableThinOpaque();
@@ -885,6 +896,8 @@ namespace dxvk {
     constants.reSTIRGIMISRoughness = restirGI.misRoughness();
     constants.reSTIRGIMISParallaxAmount = restirGI.parallaxAmount();
     constants.enableReSTIRGIDemodulatedTargetFunction = restirGI.useDemodulatedTargetFunction();
+    constants.enableReSTIRGISampleValidation = RtxOptions::Get()->useRTXDI() && rtxdi.enableDenoiserConfidence() && restirGI.useSampleValidation();
+    constants.reSTIRGISampleValidationThreshold = restirGI.sampleValidationThreshold();
 
 
     m_common->metaNeeCache().setRaytraceArgs(constants, m_resetHistory);
@@ -984,11 +997,18 @@ namespace dxvk {
     constants.isZUp = RtxOptions::Get()->isZUp();
     constants.enableCullingSecondaryRays = RtxOptions::Get()->enableCullingInSecondaryRays();
 
+    constants.domeLightArgs = getSceneManager().getLightManager().getDomeLightArgs();
+
+    // Ray miss value handling
+    constants.clearColorDepth = getSceneManager().getGlobals().clearColorDepth;
+    constants.clearColorPicking = getSceneManager().getGlobals().clearColorPicking;
+    constants.clearColorNormal = getSceneManager().getGlobals().clearColorNormal;
+
     // Upload the constants to the GPU
     {
       Rc<DxvkBuffer> cb = getResourceManager().getConstantsBuffer();
 
-      updateBuffer(cb, 0, sizeof(constants), &constants);
+      writeToBuffer(cb, 0, sizeof(constants), &constants);
 
       m_cmd->trackResource<DxvkAccess::Read>(cb);
     }
@@ -1095,6 +1115,9 @@ namespace dxvk {
     ScopedGpuProfileZone(this, "Integrate Raytracing");
     
     m_common->metaPathtracerIntegrateDirect().dispatch(this, rtOutput);
+
+    m_common->metaRtxdiRayQuery().dispatchGradient(this, rtOutput);
+
     m_common->metaPathtracerIntegrateIndirect().dispatch(this, rtOutput);
     m_common->metaPathtracerIntegrateIndirect().dispatchNEE(this, rtOutput);
   }

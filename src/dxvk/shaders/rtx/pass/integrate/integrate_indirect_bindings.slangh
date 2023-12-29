@@ -28,6 +28,9 @@
 
 // Shared Inputs
 
+layout(binding = INTEGRATE_BINDING_LINEAR_WRAP_SAMPLER)
+SamplerState LinearWrapSampler;
+
 layout(binding = INTEGRATE_INDIRECT_BINDING_SKYPROBE)
 SamplerCube<float3> SkyProbe;
 
@@ -88,6 +91,9 @@ Texture2D<float4> LastComposite;
 
 layout(r32ui, binding = INTEGRATE_INDIRECT_BINDING_FIRST_SAMPLED_LOBE_DATA_INPUT)
 Texture2D<uint> FirstSampledLobeData;
+
+layout(rg16f, binding = INTEGRATE_INDIRECT_BINDING_GRADIENTS_INPUT)
+Texture2DArray<float2> RtxdiGradients;
 
 // Storage
 

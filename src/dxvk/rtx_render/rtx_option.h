@@ -105,6 +105,9 @@ namespace dxvk {
 
     void readOption(const Config& options, ValueType type);
     void writeOption(Config& options, bool changedOptionOnly);
+
+    bool isDefault() const;
+
     void resetOption();
 
     static std::string getFullName(const std::string& category, const std::string& name) {

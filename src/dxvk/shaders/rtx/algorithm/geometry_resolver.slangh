@@ -108,7 +108,8 @@ void geometryResolverOutputMiss(
     PrimaryScreenSpaceMotionVector[pixelCoordinate] = motionVectorPixel;
     PrimarySurfaceFlags[pixelCoordinate] = 0;
     PrimaryDisocclusionThresholdMix[pixelCoordinate] = 0;
-    PrimaryDepth[pixelCoordinate] = 0.f;
+    PrimaryDepth[pixelCoordinate] = cb.clearColorDepth;
+    PrimaryObjectPicking[pixelCoordinate] = cb.clearColorPicking;
 
     // Note: Always write to stochastic buffers in the primary surface case.
     writeMissToGBuffer(
@@ -402,6 +403,12 @@ void geometryResolverVertexOutputDebugView(
     // textures which use a clamp to edge blend mode super well, but that is fine.
     storeInDebugView(pixelCoordinate, fract(surfaceInteraction.textureCoordinates));
 
+    break;
+  case DEBUG_VIEW_TEXCOORDS_GRADIENT_X:
+    storeInDebugView(pixelCoordinate, surfaceInteraction.textureGradientX);
+    break;
+  case DEBUG_VIEW_TEXCOORDS_GRADIENT_Y:
+    storeInDebugView(pixelCoordinate, surfaceInteraction.textureGradientY);
     break;
   case DEBUG_VIEW_TEXCOORD_GENERATION_MODE:
     storeInDebugView(pixelCoordinate, uint(surface.texcoordGenerationMode));
@@ -1076,11 +1083,20 @@ void geometryResolverVertex(
   }
   else
   {
-    // Apply sky radiance on miss
-    // TODO: add jitter?
-    vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, geometryResolverState.pixelCoordinate);
-    emissiveRadiance += cb.skyBrightness * SkyMatte.Sample(screenUV);
+    if(cb.domeLightArgs.active)
+    {
+      emissiveRadiance += cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, geometryResolverState.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+    else
+    {
+      // Apply sky radiance on miss
+      // TODO: add jitter?
+      vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, geometryResolverState.pixelCoordinate);
+      emissiveRadiance += cb.skyBrightness * SkyMatte.Sample(screenUV);
+    }
   }
+
+  imageStore(PrimaryObjectPicking, geometryResolverState.pixelCoordinate, surface.objectPickingValue);
 
   // Handle attenuation and emissive radiance from the Resolve function
 
@@ -1550,8 +1566,15 @@ void geometryPSRResolverVertex(
   }
   else
   {
-    // Output radiance from sky probe
-    emissiveRadiance += cb.skyBrightness * SkyProbe.Sample(ray.direction);
+    if(cb.domeLightArgs.active)
+    {
+      emissiveRadiance += cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+    else
+    {
+      // Output radiance from sky probe
+      emissiveRadiance += cb.skyBrightness * SkyProbe.Sample(ray.direction);
+    }
   }
 
   // Note: Emissive radiance handled first so objects with opacity do not attenuate themselves.

@@ -319,7 +319,14 @@ void integratePathVertex(
     // Note: True misses going out into infinity will have no hit in the ray interaction and the continue resolving flag set to false. This is in contrast to misses
     // which may require further resolving which may be needed in cases of skipping specific pieces of geometry while still wishing to continue traversal.
 
-    emissiveRadiance += cb.skyBrightness * SkyProbe.Sample(pathState.direction);
+    if(cb.domeLightArgs.active)
+    {
+      emissiveRadiance += cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, pathState.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+    else
+    {
+      emissiveRadiance += cb.skyBrightness * SkyProbe.Sample(pathState.direction);
+    }
   }
 
   // Handle emissive radiance and attenuation from the Resolve function
@@ -706,6 +713,23 @@ void integratePathVertex(
           dot(surfaceInteraction.triangleNormal, prevSurfaceInteraction.triangleNormal) > 0.8f &&
           (relativeLength < prevHitDistance * distanceTolerance ||
             abs(dot(prevSurfaceInteraction.triangleNormal, relativePosition)) < relativeLength * planeTolerance);
+      }
+
+      if (cb.enableReSTIRGISampleValidation > 0 && isWithinGbuffer)
+      {
+        ivec2 pixelCoordinateCurrentFrame;
+        bool isWithinGbufferCurrentFrame = calculateScreenBoundedPixelCoordinate(
+          cb.camera.worldToProjectionJittered,
+          surfaceInteraction.position, pixelCoordinateCurrentFrame);
+
+        if (isWithinGbufferCurrentFrame)
+        {
+          vec2 gradient = RtxdiGradients[uint3(pixelCoordinate / RTXDI_GRAD_FACTOR, 0)];
+          if (gradient.x > cb.reSTIRGISampleValidationThreshold)
+          {
+            isWithinGbuffer = false;
+          }
+        }
       }
     
       vec3 indirectLight = vec3(0);

@@ -27,6 +27,9 @@
 
 // Inputs
 
+layout(binding = GBUFFER_BINDING_LINEAR_WRAP_SAMPLER)
+SamplerState LinearWrapSampler;
+
 layout(binding = GBUFFER_BINDING_VOLUME_FILTERED_RADIANCE_INPUT)
 Sampler3D<float3> VolumeFilteredRadiance;
 
@@ -218,3 +221,6 @@ RWTexture2D<uint2> TransmissionPSRData2;
 
 layout(rg32ui, binding = GBUFFER_BINDING_TRANSMISSION_PSR_DATA_STORAGE_3)
 RWTexture2D<uint2> TransmissionPSRData3;
+
+layout(r32ui, binding = GBUFFER_BINDING_PRIMARY_OBJECT_PICKING_OUTPUT)
+RWTexture2D<uint> PrimaryObjectPicking;

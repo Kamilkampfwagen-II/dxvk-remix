@@ -5,6 +5,7 @@ lssUsd_src = files([
   'usd_mesh_samplers.h',
   'hd/usd_mesh_util.cpp',
   'hd/usd_mesh_util.h',
+  'mdl_helpers.h'
 ])
 
 if not dxvk_is_msvc
@@ -26,7 +27,7 @@ libusd_generated_embedded_files = embedding_compiler.process(libusd_embedded_dat
 
 lssUsd_lib = static_library('lssUsd', lssUsd_src,[libusd_generated_embedded_files],
   dependencies        : [ usd_dep, embedded_dep ],
-  include_directories : [ usd_include_paths ],
+  include_directories : [ usd_include_paths, lssusd_include_paths ],
   override_options    : ['cpp_std='+dxvk_cpp_std],
   cpp_args            : lss_Usd_args)
 

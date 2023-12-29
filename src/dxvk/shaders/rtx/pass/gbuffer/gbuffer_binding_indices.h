@@ -28,6 +28,7 @@
 #define USE_32BIT_RAY_DIRECTION 1
 
 // Inputs
+#define GBUFFER_BINDING_LINEAR_WRAP_SAMPLER                                     37
 #define GBUFFER_BINDING_SKYPROBE                                                38
 #define GBUFFER_BINDING_SKYMATTE                                                39
 #define GBUFFER_BINDING_VOLUME_FILTERED_RADIANCE_INPUT                          40
@@ -96,9 +97,10 @@
 #define GBUFFER_BINDING_DECAL_EMISSIVE_RADIANCE_STORAGE (GBUFFER_BINDING_ALIASED_DATA_1 + 0)
 #define GBUFFER_BINDING_REFLECTION_PSR_DATA_STORAGE_1   (GBUFFER_BINDING_ALIASED_DATA_1 + 1)
 
+#define GBUFFER_BINDING_PRIMARY_OBJECT_PICKING_OUTPUT                           96
 
 #define GBUFFER_MIN_BINDING                         GBUFFER_BINDING_SKYMATTE
-#define GBUFFER_MAX_BINDING                         GBUFFER_BINDING_REFLECTION_PSR_DATA_STORAGE_1
+#define GBUFFER_MAX_BINDING                         GBUFFER_BINDING_PRIMARY_OBJECT_PICKING_OUTPUT
 
 #if GBUFFER_MIN_BINDING <= COMMON_MAX_BINDING
 #error "Increase the base index of G-buffer bindings to avoid overlap with common bindings!"
